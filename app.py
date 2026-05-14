@@ -52,7 +52,9 @@ st.markdown("Upload your PDFs, Word documents, or provide web URLs to start aski
 # Sidebar for configuration and uploads
 with st.sidebar:
     st.header("⚙️ Configuration")
-    api_key = st.text_input("Google Gemini API Key", type="password", value=os.environ.get("GOOGLE_API_KEY", ""))
+    api_key = st.text_input("Google Gemini API Key", type="password", placeholder="Paste your API key here")
+    if not api_key and not os.environ.get("GOOGLE_API_KEY"):
+        st.info("💡 To use this app, please enter your own Google Gemini API Key. You can get a free one from [Google AI Studio](https://aistudio.google.com/app/apikey).")
     
     st.header("📄 Data Sources")
     uploaded_files = st.file_uploader("Upload Documents (PDF, DOCX)", type=["pdf", "docx", "doc"], accept_multiple_files=True)
@@ -74,11 +76,12 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 def process_documents(uploaded_files, web_urls, api_key):
-    if not api_key:
+    active_key = api_key or os.environ.get("GOOGLE_API_KEY")
+    if not active_key:
         st.error("⚠️ Please provide a Google API Key.")
         return None
         
-    os.environ["GOOGLE_API_KEY"] = api_key
+    os.environ["GOOGLE_API_KEY"] = active_key
     documents = []
     
     with st.spinner("⏳ Loading documents..."):
