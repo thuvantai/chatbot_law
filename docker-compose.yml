@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  chatbot:
+    build: .
+    container_name: rag_chatbot
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - /app/venv
+      - /app/.venv
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    restart: unless-stopped
