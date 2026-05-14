@@ -1,5 +1,7 @@
 import os
 import tempfile
+import time
+import shutil
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,12 +11,32 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
+from translations import TRANSLATIONS
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 load_dotenv()
 
-st.set_page_config(page_title="Legal Document Chatbot", page_icon="⚖️", layout="wide")
+# Initialize language in session state
+if "lang" not in st.session_state:
+    st.session_state.lang = "vi"
+
+t = TRANSLATIONS[st.session_state.lang]
+
+st.set_page_config(page_title=t["page_title"], page_icon="⚖️", layout="wide")
+
+# Language selector in sidebar
+with st.sidebar:
+    st.header("🌐 Language / Ngôn ngữ")
+    lang_choice = st.selectbox(
+        "Select Language / Chọn Ngôn ngữ",
+        options=["Tiếng Việt", "English"],
+        index=0 if st.session_state.lang == "vi" else 1
+    )
+    new_lang = "vi" if lang_choice == "Tiếng Việt" else "en"
+    if new_lang != st.session_state.lang:
+        st.session_state.lang = new_lang
+        st.rerun()
 
 # CSS to make the UI look more premium and dynamic
 st.markdown("""
@@ -48,39 +70,36 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚖️ Legal Document Q&A Chatbot")
-st.markdown("Upload your PDFs, Word documents, or provide web URLs to start asking questions!")
+st.title(t["title"])
+st.markdown(t["description"])
 
 # Sidebar for configuration and uploads
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    api_key = st.text_input("Google Gemini API Key", type="password", placeholder="Paste your API key here")
+    st.header(t["config_header"])
+    api_key = st.text_input(t["api_key_label"], type="password", placeholder=t["api_key_placeholder"])
     if not api_key and not os.environ.get("GOOGLE_API_KEY"):
-        st.info("💡 To use this app, please enter your own Google Gemini API Key. You can get a free one from [Google AI Studio](https://aistudio.google.com/app/apikey).")
+        st.info(t["api_key_info"])
     
     st.markdown("---")
-    st.header("🔒 Admin Access")
-    admin_password = st.text_input("Admin Password", type="password")
+    st.header(t["admin_header"])
+    admin_password = st.text_input(t["admin_password_label"], type="password")
     is_admin = (admin_password == os.environ.get("ADMIN_PASSWORD", "admin123"))
     
     if is_admin:
-        st.success("✅ Admin Access Granted")
-        st.header("📄 Upload Data Sources")
-        uploaded_files = st.file_uploader("Upload Documents (PDF, DOCX)", type=["pdf", "docx", "doc"], accept_multiple_files=True)
-        web_urls = st.text_area("Web URLs (one per line)", placeholder="https://example.com/legal-document")
-        process_btn = st.button("🚀 Process Documents")
+        st.success(t["admin_success"])
+        st.header(t["upload_header"])
+        uploaded_files = st.file_uploader(t["upload_label"], type=["pdf", "docx", "doc"], accept_multiple_files=True)
+        web_urls = st.text_area(t["urls_label"], placeholder=t["urls_placeholder"])
+        process_btn = st.button(t["process_btn"])
     else:
-        st.info("Log in as Admin to upload new documents.")
+        st.info(t["admin_info"])
         process_btn = False
         uploaded_files = []
         web_urls = ""
     
     st.markdown("---")
-    st.markdown("### How to use:")
-    st.markdown("1. Enter your Google Gemini API Key.")
-    st.markdown("2. Upload your documents or enter URLs.")
-    st.markdown("3. Click 'Process Documents'.")
-    st.markdown("4. Ask questions in the chat!")
+    st.markdown(t["how_to_use_header"])
+    st.markdown(t["how_to_use_steps"])
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -90,12 +109,12 @@ CHROMA_DIR = "./chroma_db"
 def process_documents(uploaded_files, web_urls, api_key):
     active_key = api_key or os.environ.get("GOOGLE_API_KEY")
     if not active_key:
-        st.error("⚠️ Please provide a Google API Key.")
+        st.error(t["error_api_key"])
         return False
         
     documents = []
     
-    with st.spinner("⏳ Loading documents..."):
+    with st.spinner(t["spinner_loading"]):
         # Process uploaded files
         for uploaded_file in uploaded_files:
             file_extension = os.path.splitext(uploaded_file.name)[1].lower()
@@ -112,9 +131,9 @@ def process_documents(uploaded_files, web_urls, api_key):
                     loader = Docx2txtLoader(temp_filepath)
                     documents.extend(loader.load())
                 elif file_extension == ".doc":
-                    st.error(f"❌ '{uploaded_file.name}' is a .doc file. Please convert it to .docx first.")
+                    st.error(t["error_doc_format"].format(file_name=uploaded_file.name))
             except Exception as e:
-                st.error(f"❌ Error loading {uploaded_file.name}: {e}")
+                st.error(t["error_loading"].format(file_name=uploaded_file.name, error=e))
             finally:
                 os.remove(temp_filepath)
                 
@@ -126,25 +145,50 @@ def process_documents(uploaded_files, web_urls, api_key):
                     loader = WebBaseLoader(url)
                     documents.extend(loader.load())
                 except Exception as e:
-                    st.error(f"❌ Error loading {url}: {e}")
+                    st.error(t["error_loading"].format(file_name=url, error=e))
                     
     if not documents:
-        st.warning("⚠️ No documents loaded. Please upload files or provide valid URLs.")
+        st.warning(t["warning_no_docs"])
         return None
         
-    with st.spinner("🧠 Processing and indexing documents..."):
+    with st.spinner(t["spinner_indexing"]):
         try:
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(documents)
             
             embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=active_key)
             
-            # Using Chroma vector store with persistent directory
-            vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings, persist_directory=CHROMA_DIR)
-            st.success("✅ Documents processed successfully!")
+            # Process in small batches with long delays to respect the very tight 30K TPM limit
+            batch_size = 10
+            
+            # Initialize Chroma (will connect to existing data if it exists)
+            vectorstore = Chroma(
+                persist_directory=CHROMA_DIR,
+                embedding_function=embeddings
+            )
+            
+            # Optimized for efficiency: larger batches to conserve RPD (Limit 1K), 
+            # but longer delays to respect TPM (Limit 30K).
+            # 40 chunks * ~250 tokens = ~10,000 tokens per request.
+            # 1.5 requests per minute (40s delay) = ~15,000 TPM (Safe under 30K).
+            batch_size = 40
+            progress_bar = st.progress(0)
+            for i in range(0, len(splits), batch_size):
+                if i > 0:
+                    # Wait 40 seconds between batches to stay under 30K TPM
+                    time.sleep(40)
+                
+                batch = splits[i:i + batch_size]
+                vectorstore.add_documents(batch)
+                
+                # Update progress
+                progress = min((i + batch_size) / len(splits), 1.0)
+                progress_bar.progress(progress)
+            
+            st.success(t["success_processed"])
             return True
         except Exception as e:
-            st.error(f"❌ Error during processing: {e}")
+            st.error(t["error_processing"].format(error=e))
             return False
 
 if process_btn:
@@ -153,7 +197,7 @@ if process_btn:
         st.session_state.chat_history = [] 
 
 # Chat interface
-st.markdown("### 💬 Chat")
+st.markdown(t["chat_header"])
 chat_container = st.container()
 
 with chat_container:
@@ -161,13 +205,13 @@ with chat_container:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
             if "sources" in msg:
-                with st.expander("📚 View Sources"):
+                with st.expander(t["view_sources"]):
                     for i, doc in enumerate(msg["sources"]):
-                        st.markdown(f"**Source {i+1}:**")
+                        st.markdown(t["source_label"].format(index=i+1))
                         st.info(f"{doc.page_content[:300]}...")
                         st.caption(f"Metadata: {doc.metadata}")
 
-if prompt := st.chat_input("Ask a question about the provided documents..."):
+if prompt := st.chat_input(t["chat_placeholder"]):
     with st.chat_message("user"):
         st.write(prompt)
     st.session_state.chat_history.append({"role": "user", "content": prompt})
@@ -175,12 +219,12 @@ if prompt := st.chat_input("Ask a question about the provided documents..."):
     active_key = api_key or os.environ.get("GOOGLE_API_KEY")
     
     if not os.path.exists(CHROMA_DIR):
-        st.warning("⚠️ No documents have been uploaded yet. An admin must upload documents first.")
+        st.warning(t["warning_no_docs_uploaded"])
     elif not active_key:
-        st.error("⚠️ Please provide a Google API Key in the sidebar.")
+        st.error(t["error_api_key_sidebar"])
     else:
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.spinner(t["thinking"]):
                 try:
                     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=active_key)
                     vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
@@ -188,14 +232,10 @@ if prompt := st.chat_input("Ask a question about the provided documents..."):
                     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, google_api_key=active_key)
                     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
                     
-                    system_prompt = (
-                        "You are an expert legal assistant specialized in analyzing documents and answering questions based on them. "
-                        "Use the following pieces of retrieved context to answer the user's question accurately. "
-                        "If the answer cannot be found in the provided context, state clearly that you don't know based on the provided documents. "
-                        "Do not make up information. Provide a clear and well-structured answer."
-                        "\n\n"
-                        "Context:\n{context}"
-                    )
+                    # Delay 12 seconds to stay within the 5 RPM limit shown in your screenshot
+                    time.sleep(12)
+                    
+                    system_prompt = t["system_prompt"]
                     
                     prompt_template = ChatPromptTemplate.from_messages([
                         ("system", system_prompt),
@@ -210,9 +250,9 @@ if prompt := st.chat_input("Ask a question about the provided documents..."):
                     sources = response["context"]
                     
                     st.write(answer)
-                    with st.expander("📚 View Sources"):
+                    with st.expander(t["view_sources"]):
                         for i, doc in enumerate(sources):
-                            st.markdown(f"**Source {i+1}:**")
+                            st.markdown(t["source_label"].format(index=i+1))
                             st.info(f"{doc.page_content[:300]}...")
                             st.caption(f"Metadata: {doc.metadata}")
                     
@@ -222,4 +262,4 @@ if prompt := st.chat_input("Ask a question about the provided documents..."):
                         "sources": sources
                     })
                 except Exception as e:
-                    st.error(f"❌ An error occurred: {e}")
+                    st.error(t["error_general"].format(error=e))
