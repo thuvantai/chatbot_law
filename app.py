@@ -56,11 +56,22 @@ with st.sidebar:
     if not api_key and not os.environ.get("GOOGLE_API_KEY"):
         st.info("💡 To use this app, please enter your own Google Gemini API Key. You can get a free one from [Google AI Studio](https://aistudio.google.com/app/apikey).")
     
-    st.header("📄 Data Sources")
-    uploaded_files = st.file_uploader("Upload Documents (PDF, DOCX)", type=["pdf", "docx", "doc"], accept_multiple_files=True)
-    web_urls = st.text_area("Web URLs (one per line)", placeholder="https://example.com/legal-document")
+    st.markdown("---")
+    st.header("🔒 Admin Access")
+    admin_password = st.text_input("Admin Password", type="password")
+    is_admin = (admin_password == os.environ.get("ADMIN_PASSWORD", "admin123"))
     
-    process_btn = st.button("🚀 Process Documents")
+    if is_admin:
+        st.success("✅ Admin Access Granted")
+        st.header("📄 Upload Data Sources")
+        uploaded_files = st.file_uploader("Upload Documents (PDF, DOCX)", type=["pdf", "docx", "doc"], accept_multiple_files=True)
+        web_urls = st.text_area("Web URLs (one per line)", placeholder="https://example.com/legal-document")
+        process_btn = st.button("🚀 Process Documents")
+    else:
+        st.info("Log in as Admin to upload new documents.")
+        process_btn = False
+        uploaded_files = []
+        web_urls = ""
     
     st.markdown("---")
     st.markdown("### How to use:")
@@ -69,19 +80,17 @@ with st.sidebar:
     st.markdown("3. Click 'Process Documents'.")
     st.markdown("4. Ask questions in the chat!")
 
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
-
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+    
+CHROMA_DIR = "./chroma_db"
 
 def process_documents(uploaded_files, web_urls, api_key):
     active_key = api_key or os.environ.get("GOOGLE_API_KEY")
     if not active_key:
         st.error("⚠️ Please provide a Google API Key.")
-        return None
+        return False
         
-    os.environ["GOOGLE_API_KEY"] = active_key
     documents = []
     
     with st.spinner("⏳ Loading documents..."):
@@ -126,21 +135,19 @@ def process_documents(uploaded_files, web_urls, api_key):
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(documents)
             
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=active_key)
             
-            # Using Chroma vector store
-            vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+            # Using Chroma vector store with persistent directory
+            vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings, persist_directory=CHROMA_DIR)
             st.success("✅ Documents processed successfully!")
-            return vectorstore
+            return True
         except Exception as e:
             st.error(f"❌ Error during processing: {e}")
-            return None
+            return False
 
 if process_btn:
-    vectorstore = process_documents(uploaded_files, web_urls, api_key)
-    if vectorstore:
-        st.session_state.vectorstore = vectorstore
-        # Do not clear chat history on re-process unless explicitly wanted, but it's okay for now.
+    success = process_documents(uploaded_files, web_urls, api_key)
+    if success:
         st.session_state.chat_history = [] 
 
 # Chat interface
@@ -163,19 +170,21 @@ if prompt := st.chat_input("Ask a question about the provided documents..."):
         st.write(prompt)
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     
-    if st.session_state.vectorstore is None:
-        st.warning("⚠️ Please process some documents first.")
-    elif not api_key and not os.environ.get("GOOGLE_API_KEY"):
+    active_key = api_key or os.environ.get("GOOGLE_API_KEY")
+    
+    if not os.path.exists(CHROMA_DIR):
+        st.warning("⚠️ No documents have been uploaded yet. An admin must upload documents first.")
+    elif not active_key:
         st.error("⚠️ Please provide a Google API Key in the sidebar.")
     else:
-        # Use api key from sidebar if provided, otherwise check env
-        os.environ["GOOGLE_API_KEY"] = api_key or os.environ.get("GOOGLE_API_KEY")
-        
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
-                    retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 5})
+                    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=active_key)
+                    vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+                    
+                    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, google_api_key=active_key)
+                    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
                     
                     system_prompt = (
                         "You are an expert legal assistant specialized in analyzing documents and answering questions based on them. "
