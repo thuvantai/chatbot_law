@@ -229,7 +229,7 @@ if prompt := st.chat_input(t["chat_placeholder"]):
                     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=active_key)
                     vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
                     
-                    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, google_api_key=active_key)
+                    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.2, google_api_key=active_key)
                     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
                     
                     # Delay 12 seconds to stay within the 5 RPM limit shown in your screenshot
